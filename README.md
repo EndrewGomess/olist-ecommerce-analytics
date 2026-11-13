@@ -149,11 +149,17 @@ streamlit run app.py
 ```
 
 ### Funcionalidades do Dashboard:
-- **Resiliência a ausência de banco**: Caso o arquivo `olist_analytics.duckdb` ainda não tenha sido gerado, a aplicação ativa automaticamente um modo de demonstração com dados simulados em memória, garantindo navegação completa e imediata.
-- **Top KPIs**: Faturamento total (R$), total de pedidos, ticket médio, lead time médio em dias e taxa de atraso no cumprimento do SLA.
-- **Aba Comercial**: Gráfico temporal de faturamento mensal e distribuição de pedidos por status.
-- **Aba Logística**: Gráfico donut de pontualidade de entrega (no prazo vs em atraso), lead time médio por estado e histograma de margem de entrega.
-- **Exportação de Dados**: Tabela paginada dos registros filtrados com botão de download para arquivo CSV.
+Painel de página única no formato de relatório de BI, com tema escuro em preto e amarelo (`.streamlit/config.toml`).
+
+- **Resiliência a ausência de banco**: Caso o arquivo `olist_analytics.duckdb` ainda não tenha sido gerado, a aplicação usa dados simulados em memória, com a mesma estrutura da `fct_orders`.
+- **Filtros no cabeçalho**: Período de compra, estado do cliente e categoria de produto.
+- **Indicadores**: Receita, pedidos, ticket médio e percentual de entregas no prazo.
+- **Receita por sazonalidade**: Receita e quantidade de pedidos por mês, em eixos duplos.
+- **Sazonalidade por categoria**: Matriz de pedidos por mês nas sete categorias de maior volume.
+- **Receita por estado**: Ranking dos dez estados com maior receita e mapa com a distribuição geográfica.
+- **Formas de pagamento**: Participação de cada forma de pagamento na receita.
+
+Categoria, estado e forma de pagamento vêm dos CSVs em `raw_data/` (clientes, itens, produtos e pagamentos). Sem esses arquivos, os visuais correspondentes aparecem como "Outros"/"N/I". Pedidos cancelados e indisponíveis não entram nos totais.
 
 ---
 

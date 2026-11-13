@@ -1,691 +1,681 @@
 """
-Olist Analytics Dashboard
-Aplicação interativa Streamlit com DuckDB & dbt Core
-Tomada de decisão executiva e monitoramento logístico do E-Commerce brasileiro.
+Painel de vendas Olist.
+
+Layout de página única no estilo de relatório de BI: cabeçalho com filtros e
+indicadores, seguido de uma grade de visuais. Lê a tabela fct_orders gerada
+pelo dbt no DuckDB; se o banco não existir, usa dados simulados.
 """
 
-import os
 import datetime
-import random
+import os
+
+import duckdb
 import numpy as np
 import pandas as pd
-import duckdb
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# ==============================================================================
-# 1. Configuração da Página
-# ==============================================================================
 st.set_page_config(
-    page_title="Olist Analytics Dashboard",
+    page_title="Vendas Olist",
     page_icon="📦",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# Estilização CSS customizada e moderna
+# ------------------------------------------------------------------------------
+# Paleta
+# ------------------------------------------------------------------------------
+BG = "#0B0B0B"
+CARD = "#161616"
+BORDER = "#262626"
+TEXT = "#E8E8E8"
+MUTED = "#8C8C8C"
+GRID = "#242424"
+YELLOW = "#FFC107"
+YELLOW_LIGHT = "#FFE082"
+YELLOW_DARK = "#B38600"
+YELLOW_DEEP = "#5C4A12"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MESES = [
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+]
+MESES_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun",
+               "jul", "ago", "set", "out", "nov", "dez"]
+
+ESTADOS = {
+    "AC": ("Acre", -9.0, -70.5), "AL": ("Alagoas", -9.6, -36.6),
+    "AP": ("Amapá", 1.4, -51.8), "AM": ("Amazonas", -4.2, -64.6),
+    "BA": ("Bahia", -12.5, -41.7), "CE": ("Ceará", -5.2, -39.5),
+    "DF": ("Distrito Federal", -15.8, -47.9), "ES": ("Espírito Santo", -19.6, -40.6),
+    "GO": ("Goiás", -15.9, -49.8), "MA": ("Maranhão", -5.4, -45.4),
+    "MT": ("Mato Grosso", -12.6, -55.9), "MS": ("Mato Grosso do Sul", -20.5, -54.6),
+    "MG": ("Minas Gerais", -18.5, -44.6), "PA": ("Pará", -3.8, -52.5),
+    "PB": ("Paraíba", -7.1, -36.8), "PR": ("Paraná", -24.6, -51.6),
+    "PE": ("Pernambuco", -8.4, -37.9), "PI": ("Piauí", -7.7, -42.7),
+    "RJ": ("Rio de Janeiro", -22.3, -42.7), "RN": ("Rio Grande do Norte", -5.8, -36.6),
+    "RS": ("Rio Grande do Sul", -29.8, -53.2), "RO": ("Rondônia", -10.9, -62.8),
+    "RR": ("Roraima", 2.0, -61.4), "SC": ("Santa Catarina", -27.3, -50.4),
+    "SP": ("São Paulo", -22.2, -48.7), "SE": ("Sergipe", -10.6, -37.4),
+    "TO": ("Tocantins", -10.2, -48.3),
+}
+
+CATEGORIAS = {
+    "cama_mesa_banho": "Cama e Banho",
+    "beleza_saude": "Beleza",
+    "esporte_lazer": "Esporte",
+    "moveis_decoracao": "Decoração",
+    "informatica_acessorios": "Informática",
+    "utilidades_domesticas": "Casa",
+    "relogios_presentes": "Relógios",
+    "telefonia": "Telefonia",
+    "automotivo": "Automotivo",
+    "brinquedos": "Brinquedos",
+    "cool_stuff": "Cool Stuff",
+    "ferramentas_jardim": "Jardim",
+    "perfumaria": "Perfumaria",
+    "bebes": "Bebês",
+    "eletronicos": "Eletrônicos",
+    "papelaria": "Papelaria",
+    "fashion_bolsas_e_acessorios": "Moda",
+    "pet_shop": "Pet Shop",
+}
+
+PAGAMENTOS = {
+    "credit_card": "Cartão de crédito",
+    "boleto": "Boleto",
+    "voucher": "Voucher",
+    "debit_card": "Cartão de débito",
+}
+
+STATUS_EXCLUIDOS = {"canceled", "unavailable"}
+
+# ------------------------------------------------------------------------------
+# Estilo
+# ------------------------------------------------------------------------------
 st.markdown(
-    """
+    f"""
     <style>
-    .main-header {
-        font-size: 2.1rem;
+    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,1,0');
+
+    html, body, [class*="css"], .stApp {{
+        font-family: 'Inter', sans-serif;
+    }}
+    .stApp {{ background: {BG}; }}
+    header[data-testid="stHeader"], footer, #MainMenu,
+    [data-testid="stSidebarCollapsedControl"], [data-testid="stToolbar"] {{
+        display: none !important;
+    }}
+    .block-container {{
+        padding: 1.2rem 1.6rem 1rem 1.6rem;
+        max-width: 100%;
+    }}
+
+    /* Cartões */
+    [class*="st-key-card"] {{
+        background: {CARD};
+        border: 1px solid {BORDER};
+        border-radius: 12px;
+        padding: 14px 16px 6px 16px;
+    }}
+    .card-title {{
+        color: {TEXT};
         font-weight: 700;
-        color: #1E293B;
-        margin-bottom: 0.2rem;
-    }
-    .sub-header {
-        font-size: 1.05rem;
-        color: #64748B;
-        margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 10px;
-        padding: 16px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .badge-tech {
-        background-color: #E0E7FF;
-        color: #4338CA;
+        font-size: 0.98rem;
+        line-height: 1.2;
+    }}
+    .card-sub {{
+        color: {MUTED};
+        font-size: 0.76rem;
+        margin-bottom: 4px;
+    }}
+
+    /* Título */
+    .dash-title {{
+        font-family: 'Bebas Neue', sans-serif;
+        font-size: 3.6rem;
+        line-height: 0.9;
+        letter-spacing: 1px;
+        color: {YELLOW};
+        margin: 0;
+    }}
+    .dash-tag {{
+        color: {MUTED};
+        font-size: 0.78rem;
+        margin-top: 4px;
+    }}
+    .dash-tag b {{ color: {YELLOW}; font-weight: 600; }}
+
+    /* Cartão de indicadores */
+    .kpi-card {{
+        background: linear-gradient(100deg, #1A1A1A 0%, #3A2E05 30%, {YELLOW_DARK} 65%, {YELLOW} 100%);
+        border-radius: 12px;
+        padding: 16px 22px;
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        min-height: 92px;
+        align-items: center;
+    }}
+    .kpi {{ display: flex; align-items: center; gap: 12px; }}
+    .kpi-icon {{
+        font-family: 'Material Symbols Rounded';
+        font-size: 26px;
+        width: 46px; height: 46px;
+        border-radius: 50%;
+        background: {BG};
+        color: {YELLOW};
+        display: flex; align-items: center; justify-content: center;
+        border: 1px solid rgba(255,193,7,0.35);
+    }}
+    .kpi-label {{
+        color: #F4F4F4;
+        font-size: 0.82rem;
+        font-weight: 600;
+    }}
+    .kpi-value {{
+        color: #FFFFFF;
+        font-size: 1.55rem;
+        font-weight: 700;
+        line-height: 1.1;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+    }}
+
+    /* Widgets */
+    [data-testid="stWidgetLabel"] p {{
+        color: {TEXT};
         font-size: 0.8rem;
         font-weight: 600;
-        padding: 3px 8px;
-        border-radius: 6px;
-        display: inline-block;
-        margin-right: 6px;
-    }
+    }}
+    [data-baseweb="select"] > div {{
+        background: {BG};
+        border-color: #333;
+    }}
+    .src-note {{
+        color: {MUTED};
+        font-size: 0.72rem;
+        text-align: right;
+        margin-top: 6px;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ==============================================================================
-# 2. Funções de Apoio e Formatação
-# ==============================================================================
-def format_currency_br(val: float) -> str:
-    """Formata valor em Real Brasileiro (R$ 1.234,56)."""
-    if pd.isna(val) or val is None:
-        return "R$ 0,00"
-    return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+# ------------------------------------------------------------------------------
+# Formatação
+# ------------------------------------------------------------------------------
+def fmt_compacto(valor: float, prefixo: str = "R$ ") -> str:
+    """Formata números grandes no padrão brasileiro (R$ 1,2 Mi, R$ 850 mil)."""
+    if valor is None or pd.isna(valor):
+        return f"{prefixo}0"
+    v = float(valor)
+    if abs(v) >= 1e9:
+        txt = f"{v / 1e9:.1f} Bi"
+    elif abs(v) >= 1e6:
+        txt = f"{v / 1e6:.1f} Mi"
+    elif abs(v) >= 1e3:
+        txt = f"{v / 1e3:.1f} mil"
+    else:
+        txt = f"{v:.0f}"
+    return prefixo + txt.replace(".", ",")
 
 
-def format_number_br(val: int) -> str:
-    """Formata número inteiro no padrão brasileiro (1.234)."""
-    if pd.isna(val) or val is None:
-        return "0"
-    return f"{int(val):,}".replace(",", ".")
+def fmt_inteiro(valor: float) -> str:
+    return f"{int(valor):,}".replace(",", ".")
 
 
-# ==============================================================================
-# 3. Gerador de Dados de Demonstração (Fallback Gracioso)
-# ==============================================================================
-def generate_mock_data(n_records: int = 1200) -> pd.DataFrame:
-    """Gera dados simulados realistas com o mesmo schema de fct_orders da Olist."""
-    np.random.seed(42)
-    random.seed(42)
+def fmt_moeda(valor: float) -> str:
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-    start_date = datetime.datetime(2017, 1, 1)
-    end_date = datetime.datetime(2018, 8, 31)
-    total_seconds = int((end_date - start_date).total_seconds())
 
-    statuses = [
-        "delivered",
-        "shipped",
-        "canceled",
-        "invoiced",
-        "processing",
-        "unavailable",
-    ]
-    status_weights = [0.93, 0.03, 0.015, 0.01, 0.01, 0.005]
+def nome_categoria(slug) -> str:
+    if slug is None or pd.isna(slug) or slug == "":
+        return "Outros"
+    return CATEGORIAS.get(slug, str(slug).replace("_", " ").title())
 
-    states = [
-        "SP", "RJ", "MG", "RS", "PR", "SC", "BA", "DF", "ES", "GO",
-        "PE", "CE", "PA", "MT", "MS", "MA", "PB", "RN", "AL", "PI"
-    ]
-    state_weights = [
-        0.42, 0.13, 0.11, 0.05, 0.05, 0.04, 0.03, 0.025, 0.02, 0.02,
-        0.015, 0.015, 0.015, 0.01, 0.01, 0.01, 0.01, 0.005, 0.005, 0.01
-    ]
 
-    records = []
-    for i in range(1, n_records + 1):
-        order_id = f"demo_ord_{i:06d}"
-        customer_id = f"demo_cust_{i:06d}"
-        status = np.random.choice(statuses, p=status_weights)
-        state = np.random.choice(states, p=state_weights)
+# ------------------------------------------------------------------------------
+# Dados
+# ------------------------------------------------------------------------------
+def gerar_dados_demo(n: int = 30000) -> pd.DataFrame:
+    """Gera pedidos simulados com distribuição próxima à base real da Olist."""
+    rng = np.random.default_rng(42)
 
-        # Datas
-        sec_offset = random.randint(0, total_seconds)
-        purchase_at = start_date + datetime.timedelta(seconds=sec_offset)
-        approved_at = purchase_at + datetime.timedelta(hours=random.uniform(1, 24))
+    dias = pd.date_range("2017-01-01", "2018-08-31", freq="D")
+    t = np.arange(len(dias)) / len(dias)
+    peso = (1 + 1.3 * t) * (1 + 0.18 * np.sin(2 * np.pi * (dias.dayofyear / 365.25 - 0.15)))
+    black_friday = (dias.month == 11) & (dias.day >= 20) & (dias.day <= 27)
+    peso = np.where(black_friday, peso * 2.6, peso)
+    peso = peso / peso.sum()
 
-        # Prazos e entrega
-        estimated_delivery_days = random.randint(10, 32)
-        estimated_at = purchase_at + datetime.timedelta(days=estimated_delivery_days)
+    idx = rng.choice(len(dias), size=n, p=peso)
+    compra = dias[idx] + pd.to_timedelta(rng.integers(0, 86400, n), unit="s")
 
-        if status == "delivered":
-            carrier_at = approved_at + datetime.timedelta(hours=random.uniform(12, 72))
-            
-            # 88% no prazo, 12% atrasado
-            is_delayed = random.random() < 0.12
-            if is_delayed:
-                actual_days = estimated_delivery_days + random.uniform(1, 14)
-            else:
-                actual_days = estimated_delivery_days - random.uniform(1, 10)
-                actual_days = max(2.0, actual_days)
-            
-            delivered_at = purchase_at + datetime.timedelta(days=actual_days)
-            delivery_time_days = round(actual_days, 2)
-            delivery_margin_days = round(estimated_delivery_days - actual_days, 2)
-        else:
-            carrier_at = None
-            delivered_at = None
-            delivery_time_days = None
-            delivery_margin_days = None
+    ufs = list(ESTADOS.keys())
+    peso_uf = np.array([
+        0.1, 0.4, 0.1, 0.15, 3.4, 1.3, 2.1, 2.0, 2.0, 0.75, 0.9, 0.7,
+        11.7, 1.0, 0.5, 5.1, 1.7, 0.5, 12.9, 0.5, 5.5, 0.25, 0.05, 3.7,
+        42.0, 0.35, 0.3,
+    ])
+    uf = rng.choice(ufs, size=n, p=peso_uf / peso_uf.sum())
 
-        # Valores
-        total_items = np.random.choice([1, 2, 3, 4], p=[0.82, 0.12, 0.04, 0.02])
-        total_distinct = min(total_items, np.random.choice([1, 2], p=[0.9, 0.1]))
-        
-        # Preço log-normal realista
-        base_item_price = float(np.random.lognormal(mean=4.2, sigma=0.85))
-        total_items_amount = round(base_item_price * total_items, 2)
-        total_freight_amount = round(15.0 + (total_items * random.uniform(4.0, 12.0)), 2)
-        total_order_amount = round(total_items_amount + total_freight_amount, 2)
+    cats = list(CATEGORIAS.keys())
+    peso_cat = np.array([11, 9.5, 8.5, 7.5, 7, 6.5, 6, 4.5, 4, 4, 3.5, 3.8, 3.2, 3, 2.5, 2.3, 1.9, 1.7])
+    categoria = rng.choice(cats, size=n, p=peso_cat / peso_cat.sum())
 
-        records.append({
-            "order_id": order_id,
-            "customer_id": customer_id,
-            "order_status": status,
-            "customer_state": state,
-            "order_purchase_at": purchase_at,
-            "order_approved_at": approved_at,
-            "order_delivered_carrier_at": carrier_at,
-            "order_delivered_customer_at": delivered_at,
-            "order_estimated_delivery_at": estimated_at,
-            "total_items": total_items,
-            "total_distinct_products": total_distinct,
-            "total_items_amount": total_items_amount,
-            "total_freight_amount": total_freight_amount,
-            "total_order_amount": total_order_amount,
-            "delivery_time_days": delivery_time_days,
-            "delivery_margin_days": delivery_margin_days,
-        })
+    pagamento = rng.choice(list(PAGAMENTOS.keys()), size=n, p=[0.74, 0.195, 0.05, 0.015])
+    status = rng.choice(
+        ["delivered", "shipped", "canceled", "invoiced", "processing", "unavailable"],
+        size=n, p=[0.97, 0.011, 0.006, 0.004, 0.004, 0.005],
+    )
 
-    df = pd.DataFrame(records)
+    itens = rng.choice([1, 2, 3, 4], size=n, p=[0.85, 0.1, 0.035, 0.015])
+    valor_itens = np.round(rng.lognormal(4.45, 0.8, n) * itens, 2)
+    frete = np.round(12 + itens * rng.uniform(3, 12, n), 2)
+
+    prazo = rng.integers(12, 35, n)
+    atrasado = rng.random(n) < 0.08
+    dias_reais = np.where(
+        atrasado,
+        prazo + rng.uniform(1, 15, n),
+        np.maximum(2, prazo - rng.uniform(3, 14, n)),
+    )
+    entregue = status == "delivered"
+
+    df = pd.DataFrame({
+        "order_id": [f"demo_{i:06d}" for i in range(n)],
+        "order_status": status,
+        "order_purchase_at": compra,
+        "customer_state": uf,
+        "category": categoria,
+        "payment_type": pagamento,
+        "total_items": itens,
+        "total_items_amount": valor_itens,
+        "total_freight_amount": frete,
+        "total_order_amount": valor_itens + frete,
+        "delivery_time_days": np.where(entregue, np.round(dias_reais, 2), np.nan),
+        "delivery_margin_days": np.where(entregue, np.round(prazo - dias_reais, 2), np.nan),
+    })
     return df
 
 
-# ==============================================================================
-# 4. Carregamento de Dados (DuckDB com Fallback Seguro)
-# ==============================================================================
-@st.cache_data(show_spinner=False)
-def load_data(force_demo: bool = False):
-    """
-    Tenta carregar os dados transformados do DuckDB (fct_orders).
-    Caso o arquivo não exista ou force_demo seja True, retorna dados simulados.
-    """
-    if force_demo:
-        return generate_mock_data(), "demo"
-
-    # Possíveis locais para o arquivo DuckDB
-    candidate_paths = [
-        "olist_analytics.duckdb",
-        "/content/olist_analytics.duckdb",
-        os.path.join(os.path.dirname(__file__), "olist_analytics.duckdb"),
+def _localizar_banco():
+    candidatos = [
+        os.path.join(BASE_DIR, "olist_analytics.duckdb"),
         os.path.abspath("olist_analytics.duckdb"),
+        "/content/olist_analytics.duckdb",
     ]
+    for caminho in candidatos:
+        if os.path.exists(caminho) and os.path.getsize(caminho) > 0:
+            return caminho
+    return None
 
-    found_db_path = None
-    for path in candidate_paths:
-        if os.path.exists(path) and os.path.getsize(path) > 0:
-            found_db_path = path
-            break
 
-    if not found_db_path:
-        return generate_mock_data(), "demo"
+def _localizar_csvs():
+    necessarios = [
+        "olist_customers_dataset.csv",
+        "olist_order_items_dataset.csv",
+        "olist_products_dataset.csv",
+        "olist_order_payments_dataset.csv",
+    ]
+    for pasta in (os.path.join(BASE_DIR, "raw_data"), "/content/raw_data"):
+        if all(os.path.exists(os.path.join(pasta, f)) for f in necessarios):
+            return pasta.replace("\\", "/")
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def carregar_dados():
+    """Retorna (dataframe, origem). Origem: 'duckdb' ou 'demo'."""
+    banco = _localizar_banco()
+    if not banco:
+        return gerar_dados_demo(), "demo"
 
     try:
-        con = duckdb.connect(database=found_db_path, read_only=True)
-        tables = con.execute("SHOW TABLES;").df()["name"].tolist()
-
-        if "fct_orders" not in tables:
+        con = duckdb.connect(database=banco, read_only=True)
+        tabelas = con.execute("SHOW TABLES").df()["name"].tolist()
+        if "fct_orders" not in tabelas:
             con.close()
-            return generate_mock_data(), "demo"
+            return gerar_dados_demo(), "demo"
 
-        # Verificar se podemos enriquecer com customer_state via CSV bruto
-        raw_cust_csv = "raw_data/olist_customers_dataset.csv"
-        alt_raw_cust_csv = "/content/raw_data/olist_customers_dataset.csv"
-        csv_to_use = None
-        if os.path.exists(raw_cust_csv):
-            csv_to_use = raw_cust_csv.replace("\\", "/")
-        elif os.path.exists(alt_raw_cust_csv):
-            csv_to_use = alt_raw_cust_csv
-
-        if csv_to_use:
-            query = f"""
-            SELECT 
-                f.*,
-                c.customer_state
-            FROM fct_orders f
-            LEFT JOIN read_csv_auto('{csv_to_use}') c
-              ON f.customer_id = c.customer_id
+        raw = _localizar_csvs()
+        if raw:
+            consulta = f"""
+            with cliente as (
+                select customer_id, customer_state
+                from read_csv_auto('{raw}/olist_customers_dataset.csv')
+            ),
+            categoria as (
+                select order_id, product_category_name as category
+                from (
+                    select i.order_id, p.product_category_name,
+                           row_number() over (partition by i.order_id order by i.price desc) as rn
+                    from read_csv_auto('{raw}/olist_order_items_dataset.csv') i
+                    left join read_csv_auto('{raw}/olist_products_dataset.csv') p
+                      on i.product_id = p.product_id
+                ) where rn = 1
+            ),
+            pagamento as (
+                select order_id, payment_type
+                from (
+                    select order_id, payment_type,
+                           row_number() over (partition by order_id order by payment_value desc) as rn
+                    from read_csv_auto('{raw}/olist_order_payments_dataset.csv')
+                ) where rn = 1
+            )
+            select f.*, c.customer_state, cat.category, pg.payment_type
+            from fct_orders f
+            left join cliente c on f.customer_id = c.customer_id
+            left join categoria cat on f.order_id = cat.order_id
+            left join pagamento pg on f.order_id = pg.order_id
             """
         else:
-            query = "SELECT * FROM fct_orders"
+            consulta = """
+            select *, null as customer_state, null as category, null as payment_type
+            from fct_orders
+            """
 
-        df = con.execute(query).df()
+        df = con.execute(consulta).df()
         con.close()
-
-        # Garantir conversão de timestamps
-        time_cols = [
-            "order_purchase_at",
-            "order_approved_at",
-            "order_delivered_carrier_at",
-            "order_delivered_customer_at",
-            "order_estimated_delivery_at",
-        ]
-        for col in time_cols:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors="coerce")
-
-        if "customer_state" not in df.columns:
-            df["customer_state"] = "N/A"
-
+        df["order_purchase_at"] = pd.to_datetime(df["order_purchase_at"], errors="coerce")
         return df, "duckdb"
-
     except Exception:
-        # Fallback seguro para o modo demonstração
-        return generate_mock_data(), "demo"
+        return gerar_dados_demo(), "demo"
 
 
-# ==============================================================================
-# 5. Interface - Barra Lateral e Filtros
-# ==============================================================================
-with st.sidebar:
-    st.image(
-        "https://cdn-icons-png.flaticon.com/512/3081/3081559.png",
-        width=60,
+def preparar(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df = df[~df["order_status"].isin(STATUS_EXCLUIDOS)]
+    df = df.dropna(subset=["order_purchase_at"])
+    df["customer_state"] = df["customer_state"].fillna("N/I")
+    df["categoria"] = df["category"].map(nome_categoria)
+    df["pagamento"] = df["payment_type"].map(PAGAMENTOS).fillna("Outros")
+    df["mes_ref"] = df["order_purchase_at"].dt.to_period("M").dt.to_timestamp()
+    df["mes_num"] = df["order_purchase_at"].dt.month
+    return df
+
+
+df_raw, origem = carregar_dados()
+df_all = preparar(df_raw)
+
+
+# ------------------------------------------------------------------------------
+# Visuais
+# ------------------------------------------------------------------------------
+def layout_base(fig: go.Figure, altura: int) -> go.Figure:
+    fig.update_layout(
+        height=altura,
+        margin=dict(l=8, r=8, t=10, b=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif", color=TEXT, size=12),
+        hoverlabel=dict(bgcolor="#202020", bordercolor=YELLOW, font=dict(color=TEXT)),
     )
-    st.title("Filtros do Painel")
+    return fig
 
-    # Controle da fonte de dados
-    force_demo_toggle = st.toggle("Modo Demonstração (Mock)", value=False)
-    
-    # Carregamento
-    df_raw, data_source = load_data(force_demo=force_demo_toggle)
 
-    if data_source == "duckdb":
-        st.success("🟢 Conectado ao DuckDB (`fct_orders`)")
-    else:
-        st.warning("🟡 Dados de Demonstração (Mock)")
+def grafico_sazonalidade(df: pd.DataFrame) -> go.Figure:
+    mensal = (
+        df.groupby("mes_ref")
+        .agg(receita=("total_order_amount", "sum"), pedidos=("order_id", "nunique"))
+        .reset_index()
+    )
+    rotulos = [f"{MESES_ABREV[d.month - 1]} {d.year}" for d in mensal["mes_ref"]]
 
-    st.markdown("---")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=mensal["mes_ref"], y=mensal["receita"], name="Receita",
+        mode="lines", line=dict(color=YELLOW, width=3, shape="spline"),
+        fill="tozeroy", fillcolor="rgba(255,193,7,0.14)",
+        customdata=[[r, fmt_compacto(v)] for r, v in zip(rotulos, mensal["receita"])],
+        hovertemplate="%{customdata[0]}<br>Receita: %{customdata[1]}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=mensal["mes_ref"], y=mensal["pedidos"], name="Pedidos", yaxis="y2",
+        mode="lines", line=dict(color="#F5F5F5", width=2, shape="spline", dash="dot"),
+        customdata=rotulos,
+        hovertemplate="%{customdata}<br>Pedidos: %{y:,.0f}<extra></extra>",
+    ))
 
-    # 1. Filtro de Período (Datas)
-    min_date = df_raw["order_purchase_at"].dropna().min().date()
-    max_date = df_raw["order_purchase_at"].dropna().max().date()
+    vmax = mensal["receita"].max() if len(mensal) else 1
+    ticks = np.linspace(0, vmax, 4)
+    layout_base(fig, 300)
+    fig.update_layout(
+        legend=dict(orientation="h", x=0, y=1.12, font=dict(size=11)),
+        xaxis=dict(showgrid=False, tickformat="%b %Y", color=MUTED),
+        yaxis=dict(
+            gridcolor=GRID, zeroline=False, color=YELLOW,
+            tickvals=ticks, ticktext=[fmt_compacto(v) for v in ticks],
+        ),
+        yaxis2=dict(overlaying="y", side="right", showgrid=False, color="#BDBDBD",
+                    tickformat=",.0f", rangemode="tozero"),
+        hovermode="x unified",
+        separators=",.",
+    )
+    return fig
 
-    date_range = st.date_input(
-        "Período de Compra",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date,
+
+def grafico_matriz(df: pd.DataFrame) -> go.Figure:
+    top = df["categoria"].value_counts().head(7).index.tolist()
+    base = df[df["categoria"].isin(top)]
+    matriz = (
+        base.pivot_table(index="mes_num", columns="categoria", values="order_id",
+                         aggfunc="count", fill_value=0)
+        .reindex(index=range(1, 13), fill_value=0)
+        .reindex(columns=top, fill_value=0)
+    )
+    texto = [[fmt_inteiro(v) for v in linha] for linha in matriz.values]
+
+    fig = go.Figure(go.Heatmap(
+        z=matriz.values, x=top, y=MESES,
+        text=texto, texttemplate="%{text}", textfont=dict(color="#111111", size=11),
+        colorscale=[[0, "#FFF8E1"], [0.5, "#FFD54F"], [1, "#FF9F00"]],
+        showscale=False, xgap=2, ygap=2,
+        hovertemplate="%{y} · %{x}<br>Pedidos: %{text}<extra></extra>",
+    ))
+    layout_base(fig, 300)
+    fig.update_layout(
+        xaxis=dict(side="top", showgrid=False, tickfont=dict(size=11, color=TEXT)),
+        yaxis=dict(autorange="reversed", showgrid=False, tickfont=dict(size=11, color=TEXT)),
+    )
+    return fig
+
+
+def grafico_estados(df: pd.DataFrame) -> go.Figure:
+    por_uf = (
+        df.groupby("customer_state")["total_order_amount"].sum()
+        .sort_values(ascending=False).head(10).sort_values()
+    )
+    nomes = [ESTADOS.get(uf, (uf,))[0] for uf in por_uf.index]
+
+    fig = go.Figure(go.Bar(
+        x=por_uf.values, y=nomes, orientation="h",
+        marker=dict(color=YELLOW, line=dict(width=0)),
+        text=[fmt_compacto(v) for v in por_uf.values], textposition="outside",
+        textfont=dict(color=TEXT, size=11), cliponaxis=False,
+        hovertemplate="%{y}<br>Receita: %{text}<extra></extra>",
+    ))
+    layout_base(fig, 290)
+    fig.update_layout(
+        xaxis=dict(visible=False, range=[0, por_uf.max() * 1.28 if len(por_uf) else 1]),
+        yaxis=dict(showgrid=False, tickfont=dict(size=11, color=TEXT)),
+        bargap=0.35,
+    )
+    return fig
+
+
+def grafico_mapa(df: pd.DataFrame) -> go.Figure:
+    por_uf = df.groupby("customer_state")["total_order_amount"].sum().reset_index()
+    por_uf = por_uf[por_uf["customer_state"].isin(ESTADOS.keys())]
+    por_uf["nome"] = por_uf["customer_state"].map(lambda u: ESTADOS[u][0])
+    por_uf["lat"] = por_uf["customer_state"].map(lambda u: ESTADOS[u][1])
+    por_uf["lon"] = por_uf["customer_state"].map(lambda u: ESTADOS[u][2])
+    vmax = por_uf["total_order_amount"].max() if len(por_uf) else 1
+    tamanhos = 7 + 38 * np.sqrt(por_uf["total_order_amount"] / vmax)
+
+    fig = go.Figure(go.Scattergeo(
+        lat=por_uf["lat"], lon=por_uf["lon"], text=por_uf["customer_state"],
+        mode="markers+text", textposition="top center",
+        textfont=dict(color="#CFCFCF", size=9),
+        marker=dict(size=tamanhos, color=YELLOW, opacity=0.8,
+                    line=dict(color=BG, width=1)),
+        customdata=np.stack([por_uf["nome"], por_uf["total_order_amount"].map(fmt_compacto)], axis=-1)
+        if len(por_uf) else None,
+        hovertemplate="%{customdata[0]}<br>Receita: %{customdata[1]}<extra></extra>",
+    ))
+    layout_base(fig, 290)
+    fig.update_geos(
+        scope="south america",
+        projection_type="mercator",
+        lataxis_range=[-34.5, 6], lonaxis_range=[-75, -33],
+        showland=True, landcolor="#1F1F1F",
+        showocean=True, oceancolor=BG,
+        showcountries=True, countrycolor="#3A3A3A",
+        showcoastlines=True, coastlinecolor="#3A3A3A",
+        showlakes=False, showframe=False, bgcolor="rgba(0,0,0,0)",
+    )
+    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+    return fig
+
+
+def grafico_pagamento(df: pd.DataFrame) -> go.Figure:
+    pag = df.groupby("pagamento")["total_order_amount"].sum().sort_values(ascending=False)
+    cores = [YELLOW, YELLOW_LIGHT, YELLOW_DARK, YELLOW_DEEP, "#3A3A3A"]
+
+    fig = go.Figure(go.Pie(
+        labels=pag.index, values=pag.values, hole=0.62, sort=False,
+        marker=dict(colors=cores[: len(pag)], line=dict(color=CARD, width=2)),
+        customdata=[fmt_compacto(v) for v in pag.values],
+        texttemplate="%{label}<br>%{customdata} (%{percent})",
+        textposition="outside", textfont=dict(color=TEXT, size=11),
+        hovertemplate="%{label}<br>Receita: %{customdata}<br>%{percent}<extra></extra>",
+    ))
+    layout_base(fig, 290)
+    fig.update_layout(showlegend=False, margin=dict(l=30, r=30, t=30, b=20), separators=",.")
+    return fig
+
+
+def cabecalho_cartao(titulo: str, subtitulo: str):
+    st.markdown(
+        f"<div class='card-title'>{titulo}</div><div class='card-sub'>{subtitulo}</div>",
+        unsafe_allow_html=True,
     )
 
-    # 2. Filtro de Status
-    all_statuses = sorted(df_raw["order_status"].dropna().unique().tolist())
-    default_statuses = [s for s in ["delivered", "shipped"] if s in all_statuses] or all_statuses
-    selected_statuses = st.multiselect(
-        "Status do Pedido",
-        options=all_statuses,
-        default=default_statuses,
-        help="Filtre os pedidos pelo ciclo de vida no marketplace.",
+
+PLOT_CFG = {"displayModeBar": False}
+
+# ------------------------------------------------------------------------------
+# Cabeçalho: título, filtros e indicadores
+# ------------------------------------------------------------------------------
+col_titulo, col_filtros, col_kpi = st.columns([1.05, 1.75, 2.2], gap="medium", vertical_alignment="center")
+
+with col_titulo:
+    tag = "Fonte: <b>DuckDB · fct_orders</b>" if origem == "duckdb" else "Fonte: <b>dados de demonstração</b>"
+    st.markdown(
+        f"<p class='dash-title'>VENDAS OLIST</p><div class='dash-tag'>{tag}</div>",
+        unsafe_allow_html=True,
     )
 
-    # 3. Filtro de Estados (UF)
-    all_states = sorted([s for s in df_raw["customer_state"].dropna().unique() if s != "N/A"])
-    selected_states = st.multiselect(
-        "Estados (UF)",
-        options=all_states,
-        default=[],
-        help="Deixe vazio para considerar todos os estados.",
+data_min = df_all["order_purchase_at"].min().date()
+data_max = df_all["order_purchase_at"].max().date()
+padrao_ini = max(data_min, datetime.date(2017, 1, 1))
+padrao_fim = min(data_max, datetime.date(2018, 8, 31))
+if padrao_ini >= padrao_fim:
+    padrao_ini, padrao_fim = data_min, data_max
+
+with col_filtros:
+    with st.container(key="card_filtros"):
+        f1, f2, f3 = st.columns([1.5, 1, 1])
+        with f1:
+            periodo = st.slider(
+                "Período",
+                min_value=data_min, max_value=data_max,
+                value=(padrao_ini, padrao_fim),
+                format="DD/MM/YYYY",
+            )
+        with f2:
+            ufs_disp = sorted(u for u in df_all["customer_state"].unique() if u in ESTADOS)
+            uf_sel = st.selectbox(
+                "Estado", ["Todos"] + ufs_disp,
+                format_func=lambda u: u if u == "Todos" else f"{u} · {ESTADOS[u][0]}",
+            )
+        with f3:
+            cats_disp = df_all["categoria"].value_counts().index.tolist()
+            cat_sel = st.selectbox("Categoria", ["Todas"] + cats_disp)
+
+df = df_all[
+    (df_all["order_purchase_at"].dt.date >= periodo[0])
+    & (df_all["order_purchase_at"].dt.date <= periodo[1])
+]
+if uf_sel != "Todos":
+    df = df[df["customer_state"] == uf_sel]
+if cat_sel != "Todas":
+    df = df[df["categoria"] == cat_sel]
+
+receita = df["total_order_amount"].sum()
+pedidos = df["order_id"].nunique()
+ticket = receita / pedidos if pedidos else 0
+entregues = df["delivery_margin_days"].dropna()
+no_prazo = (entregues >= 0).mean() * 100 if len(entregues) else 0
+
+def bloco_kpi(icone: str, rotulo: str, valor: str) -> str:
+    return (
+        f"<div class='kpi'><span class='kpi-icon'>{icone}</span>"
+        f"<div><div class='kpi-label'>{rotulo}</div><div class='kpi-value'>{valor}</div></div></div>"
     )
 
-    st.markdown("---")
-    if st.button("🔄 Recarregar Dados", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
 
-    st.caption("Stack: **dbt Core** + **DuckDB** + **Streamlit**")
+with col_kpi:
+    kpis = "".join([
+        bloco_kpi("payments", "Receita", fmt_compacto(receita)),
+        bloco_kpi("shopping_cart", "Pedidos", fmt_compacto(pedidos, "")),
+        bloco_kpi("receipt_long", "Ticket médio", fmt_moeda(ticket)),
+        bloco_kpi("local_shipping", "No prazo", f"{no_prazo:.1f}%".replace(".", ",")),
+    ])
+    st.markdown(f"<div class='kpi-card'>{kpis}</div>", unsafe_allow_html=True)
 
-# ==============================================================================
-# 6. Aplicação dos Filtros
-# ==============================================================================
-df_filtered = df_raw.copy()
+st.write("")
 
-# Filtro de data
-if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-    start_dt, end_dt = date_range
-    df_filtered = df_filtered[
-        (df_filtered["order_purchase_at"].dt.date >= start_dt)
-        & (df_filtered["order_purchase_at"].dt.date <= end_dt)
-    ]
+if df.empty:
+    st.warning("Nenhum pedido encontrado para os filtros selecionados.")
+    st.stop()
 
-# Filtro de status
-if selected_statuses:
-    df_filtered = df_filtered[df_filtered["order_status"].isin(selected_statuses)]
+# ------------------------------------------------------------------------------
+# Linha 2: sazonalidade e matriz
+# ------------------------------------------------------------------------------
+l2a, l2b = st.columns([1.9, 1.25], gap="medium")
+with l2a:
+    with st.container(key="card_sazonalidade"):
+        cabecalho_cartao("Receita por Sazonalidade", "Receita total e quantidade de pedidos por mês")
+        st.plotly_chart(grafico_sazonalidade(df), width="stretch", config=PLOT_CFG)
+with l2b:
+    with st.container(key="card_matriz"):
+        cabecalho_cartao("Sazonalidade por Categoria", "Pedidos por mês nas 7 categorias de maior volume")
+        st.plotly_chart(grafico_matriz(df), width="stretch", config=PLOT_CFG)
 
-# Filtro de estado
-if selected_states:
-    df_filtered = df_filtered[df_filtered["customer_state"].isin(selected_states)]
+# ------------------------------------------------------------------------------
+# Linha 3: estados, mapa e pagamento
+# ------------------------------------------------------------------------------
+l3a, l3b, l3c = st.columns([1.05, 1.05, 1.05], gap="medium")
+with l3a:
+    with st.container(key="card_estados"):
+        cabecalho_cartao("Receita por Estado", "10 estados com maior receita")
+        st.plotly_chart(grafico_estados(df), width="stretch", config=PLOT_CFG)
+with l3b:
+    with st.container(key="card_mapa"):
+        cabecalho_cartao("Distribuição Geográfica", "Receita por estado do cliente")
+        st.plotly_chart(grafico_mapa(df), width="stretch", config=PLOT_CFG)
+with l3c:
+    with st.container(key="card_pagamento"):
+        cabecalho_cartao("Representatividade por Pagamento", "Participação na receita por forma de pagamento")
+        st.plotly_chart(grafico_pagamento(df), width="stretch", config=PLOT_CFG)
 
-# ==============================================================================
-# 7. Cabeçalho Principal
-# ==============================================================================
-st.markdown('<div class="main-header">📦 Olist Executive & Logistics Dashboard</div>', unsafe_allow_html=True)
 st.markdown(
-    """
-    <div class="sub-header">
-        <span class="badge-tech">DuckDB</span>
-        <span class="badge-tech">dbt Core</span>
-        <span class="badge-tech">Modern Data Stack</span>
-        Visão estratégica de vendas, lead time e conformidade operacional de entrega.
-    </div>
-    """,
+    "<div class='src-note'>Pedidos cancelados e indisponíveis não entram nos totais.</div>",
     unsafe_allow_html=True,
-)
-
-if data_source == "demo":
-    st.info(
-        "💡 **Ambiente de Demonstração Ativo:** O arquivo analítico `olist_analytics.duckdb` "
-        "não foi detectado ou ainda não foi construído via dbt. "
-        "O painel está operando com dados simulados realistas. "
-        "Para gerar a base real, execute o pipeline no notebook `dbt_duckdb_ecommerce_olist.ipynb`."
-    )
-
-# ==============================================================================
-# 8. Top KPIs Executivos (5 Colunas)
-# ==============================================================================
-total_orders = len(df_filtered)
-total_revenue = df_filtered["total_order_amount"].sum()
-avg_ticket = (total_revenue / total_orders) if total_orders > 0 else 0.0
-
-delivered_orders = df_filtered[df_filtered["order_status"] == "delivered"]
-avg_delivery_time = (
-    delivered_orders["delivery_time_days"].mean() if not delivered_orders.empty else 0.0
-)
-
-# Taxa de atraso: pedidos entregues onde delivery_margin_days < 0
-if not delivered_orders.empty:
-    delayed_orders_count = (delivered_orders["delivery_margin_days"] < 0).sum()
-    delay_rate = (delayed_orders_count / len(delivered_orders)) * 100.0
-else:
-    delay_rate = 0.0
-
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    st.metric(
-        label="Faturamento Total",
-        value=format_currency_br(total_revenue),
-        help="Soma acumulada do valor dos itens + frete dos pedidos filtrados.",
-    )
-
-with col2:
-    st.metric(
-        label="Total de Pedidos",
-        value=format_number_br(total_orders),
-        help="Volume total de pedidos no período selecionado.",
-    )
-
-with col3:
-    st.metric(
-        label="Ticket Médio",
-        value=format_currency_br(avg_ticket),
-        help="Valor médio gasto por pedido (GMV / Pedidos).",
-    )
-
-with col4:
-    st.metric(
-        label="Lead Time Médio",
-        value=f"{avg_delivery_time:.1f} dias",
-        help="Tempo médio decorrido entre a compra e a entrega ao cliente.",
-    )
-
-with col5:
-    st.metric(
-        label="Taxa de Atraso",
-        value=f"{delay_rate:.1f}%",
-        delta=f"{(100 - delay_rate):.1f}% no prazo",
-        delta_color="inverse" if delay_rate > 10 else "normal",
-        help="Percentual de pedidos entregues após a estimativa oficial informada.",
-    )
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ==============================================================================
-# 9. Abas Analíticas
-# ==============================================================================
-tab_comercial, tab_logistica = st.tabs([
-    "📊 Desempenho Comercial & Vendas",
-    "🚚 Eficiência Logística & SLA",
-])
-
-# ------------------------------------------------------------------------------
-# Aba 1: Comercial
-# ------------------------------------------------------------------------------
-with tab_comercial:
-    if df_filtered.empty:
-        st.warning("Nenhum dado encontrado para os filtros selecionados.")
-    else:
-        col_chart1, col_chart2 = st.columns([7, 3])
-
-        with col_chart1:
-            # Série Temporal Mensal
-            df_monthly = (
-                df_filtered.set_index("order_purchase_at")
-                .resample("M")
-                .agg({"total_order_amount": "sum", "order_id": "count"})
-                .reset_index()
-            )
-            df_monthly["mes_ano"] = df_monthly["order_purchase_at"].dt.strftime("%Y-%m")
-
-            fig_timeline = px.area(
-                df_monthly,
-                x="mes_ano",
-                y="total_order_amount",
-                title="Evolução Mensal do Faturamento (R$)",
-                labels={"mes_ano": "Mês/Ano", "total_order_amount": "Faturamento (R$)"},
-                color_discrete_sequence=["#3B82F6"],
-            )
-            fig_timeline.update_layout(
-                template="plotly_white",
-                margin=dict(l=20, r=20, t=40, b=20),
-                hovermode="x unified",
-                yaxis_tickprefix="R$ ",
-            )
-            fig_timeline.update_traces(
-                line=dict(width=2.5),
-                hovertemplate="<b>Faturamento:</b> R$ %{y:,.2f}<extra></extra>",
-            )
-            st.plotly_chart(fig_timeline, use_container_width=True)
-
-        with col_chart2:
-            # Distribuição por Status
-            df_status = (
-                df_filtered["order_status"]
-                .value_counts()
-                .reset_index()
-                .rename(columns={"index": "status", "order_status": "pedidos"})
-            )
-            fig_status = px.bar(
-                df_status,
-                x="pedidos",
-                y="status",
-                orientation="h",
-                title="Volume por Status de Pedido",
-                labels={"pedidos": "Qtd. Pedidos", "status": "Status"},
-                color="status",
-                color_discrete_sequence=px.colors.qualitative.Prism,
-            )
-            fig_status.update_layout(
-                template="plotly_white",
-                margin=dict(l=20, r=20, t=40, b=20),
-                showlegend=False,
-            )
-            st.plotly_chart(fig_status, use_container_width=True)
-
-        # Gráfico adicional: Ticket Médio por Faixa de Itens
-        st.markdown("#### 🛒 Análise de Composição da Cesta")
-        c1, c2 = st.columns([5, 5])
-
-        with c1:
-            df_items_group = (
-                df_filtered.groupby("total_items")
-                .agg(
-                    qtd_pedidos=("order_id", "count"),
-                    ticket_medio=("total_order_amount", "mean"),
-                    frete_medio=("total_freight_amount", "mean"),
-                )
-                .reset_index()
-                .head(6)
-            )
-            df_items_group["total_items_label"] = df_items_group["total_items"].apply(
-                lambda x: f"{x} item" if x == 1 else f"{x} itens"
-            )
-
-            fig_basket = px.bar(
-                df_items_group,
-                x="total_items_label",
-                y="ticket_medio",
-                title="Ticket Médio por Quantidade de Itens",
-                labels={"total_items_label": "Itens no Pedido", "ticket_medio": "Ticket Médio (R$)"},
-                color_discrete_sequence=["#10B981"],
-                text_auto=".2f",
-            )
-            fig_basket.update_layout(template="plotly_white", yaxis_tickprefix="R$ ")
-            st.plotly_chart(fig_basket, use_container_width=True)
-
-        with c2:
-            fig_scatter = px.scatter(
-                df_filtered.head(400),
-                x="total_items_amount",
-                y="total_freight_amount",
-                size="total_items",
-                color="order_status",
-                title="Relação: Valor dos Itens vs Valor do Frete",
-                labels={"total_items_amount": "Valor dos Itens (R$)", "total_freight_amount": "Frete (R$)"},
-                template="plotly_white",
-            )
-            st.plotly_chart(fig_scatter, use_container_width=True)
-
-# ------------------------------------------------------------------------------
-# Aba 2: Logística
-# ------------------------------------------------------------------------------
-with tab_logistica:
-    if delivered_orders.empty:
-        st.warning("Não há pedidos com status 'delivered' no filtro atual para calcular métricas de entrega.")
-    else:
-        col_sla1, col_sla2 = st.columns([4, 6])
-
-        with col_sla1:
-            # Gráfico de Rosca - Pontualidade
-            df_log_status = delivered_orders.copy()
-            df_log_status["sla_status"] = df_log_status["delivery_margin_days"].apply(
-                lambda x: "No Prazo" if x >= 0 else "Em Atraso"
-            )
-            df_pie = df_log_status["sla_status"].value_counts().reset_index()
-            df_pie.columns = ["status_sla", "quantidade"]
-
-            fig_donut = px.pie(
-                df_pie,
-                names="status_sla",
-                values="quantidade",
-                hole=0.55,
-                title="Cumprimento de SLA de Entrega",
-                color="status_sla",
-                color_discrete_map={"No Prazo": "#10B981", "Em Atraso": "#EF4444"},
-            )
-            fig_donut.update_traces(
-                textinfo="percent+label",
-                hovertemplate="<b>%{label}:</b> %{value} pedidos (%{percent})<extra></extra>",
-            )
-            fig_donut.update_layout(
-                template="plotly_white",
-                margin=dict(l=20, r=20, t=40, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
-            )
-            st.plotly_chart(fig_donut, use_container_width=True)
-
-        with col_sla2:
-            # Lead Time Médio por Estado
-            if "customer_state" in delivered_orders.columns and delivered_orders["customer_state"].nunique() > 1:
-                df_uf_lead = (
-                    delivered_orders[delivered_orders["customer_state"] != "N/A"]
-                    .groupby("customer_state")["delivery_time_days"]
-                    .mean()
-                    .reset_index()
-                    .sort_values(by="delivery_time_days", ascending=False)
-                    .head(12)
-                )
-
-                fig_uf = px.bar(
-                    df_uf_lead,
-                    x="delivery_time_days",
-                    y="customer_state",
-                    orientation="h",
-                    title="Lead Time Médio por UF - Top 12 (Dias)",
-                    labels={"delivery_time_days": "Dias de Entrega", "customer_state": "Estado (UF)"},
-                    color="delivery_time_days",
-                    color_continuous_scale="Reds",
-                    text_auto=".1f",
-                )
-                fig_uf.update_layout(
-                    template="plotly_white",
-                    margin=dict(l=20, r=20, t=40, b=20),
-                    yaxis={"categoryorder": "total ascending"},
-                )
-                st.plotly_chart(fig_uf, use_container_width=True)
-            else:
-                # Distribuição por faixas de prazo
-                bins = [0, 5, 10, 15, 20, 100]
-                labels = ["1 a 5 dias", "6 a 10 dias", "11 a 15 dias", "16 a 20 dias", "+20 dias"]
-                delivered_orders["faixa_dias"] = pd.cut(
-                    delivered_orders["delivery_time_days"], bins=bins, labels=labels
-                )
-                df_faixas = delivered_orders["faixa_dias"].value_counts().sort_index().reset_index()
-                df_faixas.columns = ["faixa_dias", "total_pedidos"]
-
-                fig_faixas = px.bar(
-                    df_faixas,
-                    x="faixa_dias",
-                    y="total_pedidos",
-                    title="Distribuição dos Pedidos por Faixa de Lead Time",
-                    labels={"faixa_dias": "Faixa de Dias", "total_pedidos": "Total de Pedidos"},
-                    color_discrete_sequence=["#6366F1"],
-                )
-                fig_faixas.update_layout(template="plotly_white")
-                st.plotly_chart(fig_faixas, use_container_width=True)
-
-        # Histograma de Margem de Entrega (Folga x Atraso)
-        st.markdown("#### ⏱️ Margem de Segurança da Entrega")
-        fig_margin = px.histogram(
-            delivered_orders,
-            x="delivery_margin_days",
-            nbins=40,
-            title="Distribuição da Margem de Entrega em Dias (Positivo = Antes do Prazo | Negativo = Atraso)",
-            labels={"delivery_margin_days": "Margem de Cumprimento (Dias)"},
-            color_discrete_sequence=["#8B5CF6"],
-        )
-        fig_margin.add_vline(x=0, line_width=2, line_dash="dash", line_color="#EF4444")
-        fig_margin.update_layout(template="plotly_white")
-        st.plotly_chart(fig_margin, use_container_width=True)
-
-# ==============================================================================
-# 10. Expander: Visualizar e Exportar Dados Detalhados
-# ==============================================================================
-st.markdown("<br>", unsafe_allow_html=True)
-with st.expander("🔍 Visualizar e Exportar Dados Detalhados (Amostra Filtrada)"):
-    st.write(f"Exibindo **{min(len(df_filtered), 100)}** de **{len(df_filtered)}** registros filtrados:")
-    
-    cols_display = [
-        "order_id",
-        "order_status",
-        "customer_state",
-        "order_purchase_at",
-        "total_items",
-        "total_items_amount",
-        "total_freight_amount",
-        "total_order_amount",
-        "delivery_time_days",
-        "delivery_margin_days",
-    ]
-    cols_present = [c for c in cols_display if c in df_filtered.columns]
-
-    st.dataframe(
-        df_filtered[cols_present].head(100),
-        use_container_width=True,
-        height=320,
-    )
-
-    csv_data = df_filtered.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="📥 Baixar Base Filtrada Completa (.CSV)",
-        data=csv_data,
-        file_name="olist_analytics_filtered.csv",
-        mime="text/csv",
-        use_container_width=False,
-    )
-
-# ==============================================================================
-# 11. Rodapé
-# ==============================================================================
-st.markdown("---")
-st.caption(
-    "Desenvolvido com **Streamlit**, **DuckDB** e **dbt Core** • "
-    "Dataset: Olist Brazilian E-Commerce • "
-    "Arquitetura de Dados Serverless & In-Process"
 )
