@@ -1,0 +1,28 @@
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# Dados e Ingestão
+raw_data/
+data/
+
+# dbt
+target/
+dbt_packages/
+logs/
+profiles.yml
+
+# Python & Ambientes Virtuais
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Jupyter & IDEs
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,19 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: "Tabela fato consolidada de pedidos com métricas de valor e lead time de entrega."
+    columns:
+      - name: order_id
+        description: "Chave primária do pedido."
+        tests:
+          - unique
+          - not_null
+      - name: order_status
+        description: "Status do pedido."
+        tests:
+          - not_null
+      - name: total_order_amount
+        description: "Valor total do pedido (itens + frete)."
+        tests:
+          - not_null
